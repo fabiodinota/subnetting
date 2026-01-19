@@ -118,13 +118,37 @@ void menu_generate_guide(const std::vector<Device*>& devices, const std::vector<
             }
         }
         
-        // Step B: Switch2 Management
-        if (sw->get_hostname() == "Switch2") {
+        // Step B: Management Interface & Gateway
+        if (sw->get_hostname() == "Switch1") {
+            // LAN C: Network 192.168.1.96/27 (.97 - .126)
+            // Req: Highest IP (.126)
+            // Req: Gateway (.97 - Router1)
+            std::cout << CYAN << "!\n! Management Interface (Switch1 - LAN C)" << RESET << "\n";
+            std::cout << YELLOW << "interface " << BLUE << "vlan 1" << RESET << "\n";
+            std::cout << YELLOW << " ip address " << WHITE << "192.168.1.126 255.255.255.224" << RESET << "\n";
+            std::cout << GREEN << " no shutdown" << RESET << "\n exit\n";
+            std::cout << YELLOW << "ip default-gateway " << WHITE << "192.168.1.97" << RESET << "\n";
+            
+            // SSH Config
+            std::cout << CYAN << "!\n! SSH Configuration" << RESET << "\n";
+            std::cout << YELLOW << "ip domain-name " << WHITE << "lab.local" << RESET << "\n";
+            std::cout << YELLOW << "crypto key generate rsa modulus 1024" << RESET << "\n";
+            std::cout << YELLOW << "username " << WHITE << "admin" << YELLOW << " secret " << WHITE << "class" << RESET << "\n"; 
+        }
+        else if (sw->get_hostname() == "Switch2") {
+            // Req: Specific IP 192.168.50.2/24
             std::cout << CYAN << "!\n! Management Interface (Switch2 Special)" << RESET << "\n";
             std::cout << YELLOW << "interface " << BLUE << "vlan 1" << RESET << "\n";
             std::cout << YELLOW << " ip address " << WHITE << "192.168.50.2 255.255.255.0" << RESET << "\n";
-            std::cout << GREEN << " no shutdown" << RESET << "\n";
-            std::cout << " exit\n";
+            std::cout << GREEN << " no shutdown" << RESET << "\n exit\n";
+        }
+        else if (sw->get_hostname() == "Switch0") {
+            // Exam Req: Mgmt IP 192.168.1.34 on VLAN 10, Gateway .33
+            std::cout << CYAN << "!\n! Management Interface (Switch0 - LAN A/B Config)" << RESET << "\n";
+            std::cout << YELLOW << "interface " << BLUE << "vlan 10" << RESET << "\n";
+            std::cout << YELLOW << " ip address " << WHITE << "192.168.1.34 255.255.255.224" << RESET << "\n";
+            std::cout << GREEN << " no shutdown" << RESET << "\n exit\n";
+            std::cout << YELLOW << "ip default-gateway " << WHITE << "192.168.1.33" << RESET << "\n";
         }
         
         // Step C: Create VLANs (Only if trunking)
@@ -180,13 +204,30 @@ void menu_generate_guide(const std::vector<Device*>& devices, const std::vector<
         std::cout << CYAN << "!\n! VTY Configuration" << RESET << "\n";
         std::cout << YELLOW << "line vty " << WHITE << "0 15" << RESET << "\n";
         std::cout << YELLOW << " password " << WHITE << "admin" << RESET << "\n";
-        if (sw->get_hostname() == "Switch2") {
+        
+        if (sw->get_hostname() == "Switch1") {
+            std::cout << YELLOW << " transport input " << GREEN << "ssh" << RESET << "\n";
+        } else if (sw->get_hostname() == "Switch2") {
             std::cout << YELLOW << " transport input " << GREEN << "telnet" << RESET << "\n";
         }
+        
         std::cout << YELLOW << " login" << RESET << "\n";
+        if(sw->get_hostname() == "Switch1") std::cout << YELLOW << " login local" << RESET << "\n"; // SSH needs local or tacacs, usually local for lab
+        
         std::cout << " exit\n";
         
         std::cout << CYAN << "!" << RESET << "\n" << RED << "end" << RESET << "\n" << RED << "wr" << RESET << "\n";
+
+        // --- VERIFICATION COMMANDS (Switch) ---
+        std::cout << CYAN << "\n! --- VERIFICATION COMMANDS ---" << RESET << "\n";
+        std::cout << WHITE << "show vlan brief" << RESET << "\n";
+        if(sw->get_hostname() == "Switch0" || sw->get_hostname() == "Switch2") {
+            std::cout << WHITE << "show interfaces trunk" << RESET << "\n";
+        }
+        std::cout << WHITE << "show ip interface brief" << RESET << "\n";
+        if(sw->get_hostname() == "Switch1") {
+            std::cout << WHITE << "show ip ssh" << RESET << "\n";
+        }
     }
 
     // SECTION 3: Router Configurations
@@ -306,7 +347,6 @@ void menu_generate_guide(const std::vector<Device*>& devices, const std::vector<
             if(sr.router_id == this_router_idx) {
                 if(!has_static) {
                     std::cout << CYAN << "!\n! --- Static Routing ---" << RESET << "\n";
-                    has_static = true;
                 }
                 std::cout << YELLOW << "ip route " << WHITE << sr.dest_net << " " << sr.mask << " " << sr.next_hop << RESET << "\n";
             }
@@ -344,7 +384,20 @@ void menu_generate_guide(const std::vector<Device*>& devices, const std::vector<
         }
         
         std::cout << CYAN << "!\n! VTY Configuration" << RESET << "\n";
-        std::cout << YELLOW << "line vty " << WHITE << "0 4" << RESET << "\n" << YELLOW << " password " << WHITE << "admin" << RESET << "\n" << YELLOW << " login" << RESET << "\n exit\n";
+        std::cout << YELLOW << "line vty " << WHITE << "0 4" << RESET << "\n" << YELLOW << " password " << WHITE << "cisco" << RESET << "\n" << YELLOW << " login" << RESET << "\n exit\n";
         std::cout << CYAN << "!" << RESET << "\n" << RED << "end" << RESET << "\n" << RED << "wr" << RESET << "\n";
+        
+        // --- VERIFICATION COMMANDS (Router) ---
+        // --- VERIFICATION COMMANDS (Router) ---
+        std::cout << CYAN << "\n! --- VERIFICATION COMMANDS ---" << RESET << "\n";
+        std::cout << WHITE << "show ip interface brief" << RESET << "\n";
+        std::cout << WHITE << "show ip route" << RESET << "\n";
+        if(r->get_hostname() == "Router1") {
+             std::cout << WHITE << "show ip dhcp binding" << RESET << "\n";
+        }
+        std::cout << WHITE << "show running-config | section dhcp" << RESET << "\n";
+        if(r->get_hostname() == "Router0") {
+             std::cout << WHITE << "show controllers se0/1/0" << RESET << "\n";
+        }
     }
 }

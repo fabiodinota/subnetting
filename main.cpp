@@ -403,6 +403,77 @@ std::string find_server_ip_for_relay(int server_router_id) {
     return "";
 }
 
+void inspect_subnet(Network* n) {
+    if(!n) return;
+    std::cout << "\n" << Color::MAGENTA << "=== 🔍 Subnet Deep Inspection ===" << Color::RESET << "\n";
+    std::cout << "Name: " << Color::WHITE << (n->name.empty() ? "Unnamed" : n->name) << Color::RESET << "\n";
+    std::cout << "CIDR: " << Color::WHITE << "/" << n->get_slash() << Color::RESET << "\n";
+    
+    uint32_t net_addr = n->get_address();
+    uint32_t mask = n->get_mask();
+    uint32_t broadcast = net_addr | (~mask);
+    
+    // Boundaries
+    std::cout << "------------------------------------------\n";
+    printf("%-20s %s\n", "Network Address:", address_to_str(net_addr).c_str());
+    printf("%-20s %s\n", "Subnet Mask:", address_to_str(mask).c_str());
+    printf("%-20s %s\n", "First Usable:", address_to_str(net_addr + 1).c_str());
+    printf("%-20s %s\n", "Last Usable:", address_to_str(broadcast - 1).c_str());
+    printf("%-20s %s\n", "Broadcast:", address_to_str(broadcast).c_str());
+    std::cout << "------------------------------------------\n";
+    printf("%-20s %s\n", "Gateway (Router):", address_to_str(net_addr + 1).c_str());
+    std::cout << "------------------------------------------\n";
+    
+    std::cout << "\n" << Color::YELLOW << "📍 IP Assignment Plan (Exam Rules)" << Color::RESET << "\n";
+    
+    if (n->get_slash() == 30) {
+        // WAN
+        std::cout << "Type: " << Color::CYAN << "WAN Link (Point-to-Point)" << Color::RESET << "\n";
+        std::cout << " - Router0 (DCE): " << address_to_str(net_addr + 1) << "\n";
+        std::cout << " - Router1 (DTE): " << address_to_str(net_addr + 2) << "\n";
+    }
+    else if (n->dhcp_enabled && !n->dhcp_helper_ip.empty() && n->dhcp_upper_half_only) {
+        // Relay / Upper Half
+        std::cout << "Type: " << Color::CYAN << "LAN (DHCP Relay + Split Mode)" << Color::RESET << "\n";
+        
+        uint32_t total_ips = (1 << (32 - n->get_slash())); // Includes net & bcast
+        uint32_t half_point = net_addr + (total_ips / 2);
+        
+        // Static: Gateway (.1) to HalfPoint - 1
+        uint32_t static_start = net_addr + 2; // +1 is Gateway
+        uint32_t static_end = half_point - 1;
+        
+        uint32_t dhcp_start = half_point;
+        uint32_t dhcp_end = broadcast - 1;
+        
+        std::cout << " - " << Color::GREEN << "Static Assignment Range (Lower Half):" << Color::RESET << "\n";
+        std::cout << "   " << address_to_str(static_start) << " - " << address_to_str(static_end) << "\n";
+        std::cout << "   (Reserved for printers, servers, etc.)\n";
+        
+        std::cout << " - " << Color::GREEN << "DHCP Pool Range (Upper Half):" << Color::RESET << "\n";
+        std::cout << "   " << address_to_str(dhcp_start) << " - " << address_to_str(dhcp_end) << "\n";
+        std::cout << "   (Assigned by Helper: " << n->dhcp_helper_ip << ")\n";
+    }
+    else if (!n->dhcp_enabled) {
+        // Static LAN
+        std::cout << "Type: " << Color::CYAN << "LAN (Fully Static)" << Color::RESET << "\n";
+        
+        std::cout << " - " << Color::RED << "Strict Exam Recommendation:" << Color::RESET << "\n";
+        std::cout << "   [Router Interface]: " << address_to_str(net_addr + 1) << "\n";
+        std::cout << "   [PC]:               " << address_to_str(net_addr + 2) << "\n";
+        std::cout << "   [Laptop]:           " << address_to_str(net_addr + 3) << "\n";
+        std::cout << "   [Switch Mgmt]:      " << address_to_str(broadcast - 1) << " (Last Usable)\n";
+    }
+    else {
+        // Standard DHCP
+        std::cout << "Type: " << Color::CYAN << "Standard LAN (DHCP Server Local)" << Color::RESET << "\n";
+        std::cout << " - DHCP Pool: " << address_to_str(net_addr + 2) << " - " << address_to_str(broadcast - 1) << "\n";
+    }
+    
+    std::cout << "\n(Press Enter to continue)";
+    std::cin.ignore(); std::cin.get();
+}
+
 void menu_configure_subnets() {
     std::cout << "\n--- Configure Subnets ---\n";
     
@@ -527,9 +598,14 @@ void menu_configure_subnets() {
         std::string s_mask = get_mask_str(selected_net);
         
         std::cout << "Selected: " << s_net << "/" << selected_net->get_slash() << "\n";
-        std::cout << "Action: (A)ssign, (S)plit, (R)ename, (C)ancel: ";
+        std::cout << "Action: (A)ssign, (S)plit, (R)ename, (4)Inspect, (C)ancel: ";
         char action;
         std::cin >> action; clear_input();
+        
+        if (action == '4') {
+            inspect_subnet(selected_net);
+            continue;
+        }
 
         if (action == 'R' || action == 'r') {
              std::cout << "Enter name for " << s_net << " (e.g. LAN A): ";
@@ -1443,6 +1519,7 @@ void run_cli_mode() {
                     std::cout << "\n--- Static Route Manager ---\n";
                     std::cout << "1. Add Route\n";
                     std::cout << "2. View/Delete Routes\n";
+                    std::cout << "3. Auto-Configure Exam Routing\n";
                     std::cout << "0. Back\n";
                     std::cout << "Select: ";
                     int sopt;
@@ -1450,6 +1527,101 @@ void run_cli_mode() {
                     clear_input();
                     
                     if (sopt == 0) break;
+                    
+                    if (sopt == 0) break;
+                    
+                    if (sopt == 3) {
+                        std::cout << "\n--- Smart Auto-Config ---\n";
+                        std::cout << "Select Select Routering Strategy:\n";
+                        std::cout << " [1] Specific Routes (Less efficient, more rules)\n";
+                        std::cout << " [2] Default Routes (Most efficient, recommended)\n";
+                        std::cout << " Choice: ";
+                        int strat;
+                        if(!(std::cin >> strat)) { clear_input(); continue; }
+                        clear_input();
+                        
+                        // Clear existing first
+                        static_routes.clear();
+                        
+                        if(strat == 1) {
+                            // Strategy 1: Specific Routes
+                            std::cout << "Calculating specific routes...\n";
+                            
+                            // For Router0 (ID 0 usually, assuming Exam strict loading order)
+                            // Find subnets NOT assigned to Router0
+                            int router0_idx = -1;
+                            int router1_idx = -1;
+                            
+                            // Identify Router0 and Router1 by name or order
+                             for(size_t i=0; i<devices.size(); ++i) {
+                                 if(devices[i]->get_hostname() == "Router0") router0_idx = i;
+                                 if(devices[i]->get_hostname() == "Router1") router1_idx = i;
+                             }
+                             
+                             if(router0_idx != -1 && router1_idx != -1) {
+                                  // --- Router0 Logic ---
+                                  // Add routes for subnets owned by Router1
+                                  for(auto n : subnets) {
+                                      if(n->get_assignment().find("Router1") != std::string::npos) {
+                                          StaticRoute r;
+                                          r.router_id = router0_idx;
+                                          r.dest_net = address_to_str(n->get_address());
+                                          r.mask = address_to_str(n->get_mask());
+                                          r.next_hop = "192.168.1.130"; // Hardcoded next-hop to R1 WAN
+                                          static_routes.push_back(r);
+                                      }
+                                  }
+                                  
+                                  // --- Router1 Logic ---
+                                  // Add routes for subnets owned by Router0
+                                  for(auto n : subnets) {
+                                     // Skip WAN link itself to avoid self-reference if assignment string matches partially, though usually fine
+                                      if(n->get_assignment().find("Router0") != std::string::npos && n->get_slash() != 30) {
+                                          StaticRoute r;
+                                          r.router_id = router1_idx;
+                                          r.dest_net = address_to_str(n->get_address());
+                                          r.mask = address_to_str(n->get_mask());
+                                          r.next_hop = "192.168.1.129"; // Hardcoded next-hop to R0 WAN
+                                          static_routes.push_back(r);
+                                      }
+                                  }
+                                  std::cout << Color::GREEN << "✅ Specific routes for LAN subnets generated." << Color::RESET << "\n";
+                             } else {
+                                 std::cout << Color::RED << "⚠️ Router0 or Router1 not found. Load Exam Scenario first." << Color::RESET << "\n";
+                             }
+                        }
+                        else if(strat == 2) {
+                             // Strategy 2: Default Routes
+                             int router0_idx = -1;
+                             int router1_idx = -1;
+                              for(size_t i=0; i<devices.size(); ++i) {
+                                 if(devices[i]->get_hostname() == "Router0") router0_idx = i;
+                                 if(devices[i]->get_hostname() == "Router1") router1_idx = i;
+                             }
+                             
+                             if(router0_idx != -1 && router1_idx != -1) {
+                                 // Router0 -> 0.0.0.0/0 -> 192.168.1.130
+                                 StaticRoute r0inv;
+                                 r0inv.router_id = router0_idx;
+                                 r0inv.dest_net = "0.0.0.0";
+                                 r0inv.mask = "0.0.0.0";
+                                 r0inv.next_hop = "192.168.1.130";
+                                 static_routes.push_back(r0inv);
+                                 
+                                 // Router1 -> 0.0.0.0/0 -> 192.168.1.129
+                                 StaticRoute r1inv;
+                                 r1inv.router_id = router1_idx;
+                                 r1inv.dest_net = "0.0.0.0";
+                                 r1inv.mask = "0.0.0.0";
+                                 r1inv.next_hop = "192.168.1.129";
+                                 static_routes.push_back(r1inv);
+                                 
+                                 std::cout << Color::GREEN << "✅ Efficient Default Routes generated." << Color::RESET << "\n";
+                             } else {
+                                 std::cout << Color::RED << "⚠️ Router0 or Router1 not found. Load Exam Scenario first." << Color::RESET << "\n";
+                             }
+                        }
+                    }
                     
                     if (sopt == 1) {
                          std::cout << "Available Routers:\n";
