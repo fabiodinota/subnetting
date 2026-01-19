@@ -84,10 +84,40 @@ std::vector<std::string> VlanManager::parse_interface_range(const std::string& i
         if (segment.empty()) continue;
         
         // Check if this token contains letters -> EXACT NAME MODE
+        // Check if this token contains letters -> EXACT NAME MODE (with Range support e.g. Fa0/1-5)
         if (contains_letters(segment)) {
-            // This is a named interface like "Gig0/1" or "Fa0/5"
-            // Just pass it through for exact matching in assign_vlan_to_ports
-            result.push_back(segment);
+            size_t dash = segment.find('-');
+            bool expanded = false;
+            if (dash != std::string::npos) {
+                 std::string prefix_part = segment.substr(0, dash);
+                 std::string end_num_str = segment.substr(dash + 1);
+                 
+                 // Find start num from prefix_part end
+                 size_t num_start_idx = std::string::npos;
+                 for (int k = (int)prefix_part.size() - 1; k >= 0; k--) {
+                     if (!isdigit(prefix_part[k])) break;
+                     num_start_idx = k;
+                 }
+                 
+                 if (num_start_idx != std::string::npos && !end_num_str.empty() && std::all_of(end_num_str.begin(), end_num_str.end(), ::isdigit)) {
+                     try {
+                         int start = std::stoi(prefix_part.substr(num_start_idx));
+                         int end = std::stoi(end_num_str);
+                         std::string base = prefix_part.substr(0, num_start_idx);
+                         
+                         if (start > end) std::swap(start, end);
+                         
+                         for(int i=start; i<=end; ++i) {
+                             result.push_back(base + std::to_string(i));
+                         }
+                         expanded = true;
+                     } catch(...) {}
+                 }
+            }
+            
+            if (!expanded) {
+                result.push_back(segment);
+            }
         } else {
             // RANGE MODE: Pure numbers (possibly with dash)
             size_t dash = segment.find('-');
@@ -318,46 +348,52 @@ void VlanManager::menu_manage_vlans(std::vector<Device*>& devices) {
             }
             
             // Parse Range
-            std::cout << "Enter Port Range (e.g. '1-10', '1,2,5'): ";
-            std::string range_input;
-            std::getline(std::cin, range_input);
-            std::vector<std::string> ports = parse_interface_range(range_input);
-            std::cout << "Selected " << ports.size() << " ports.\n";
+            // Smart Batch Syntax
+            std::cout << "Enter assignments (e.g. 'Fa0/1:10, Fa0/2:20, Gig0/1-2:t'): ";
+            std::string batch_input;
+            std::getline(std::cin, batch_input);
             
-            // VLAN ID
-            std::cout << "Enter VLAN ID to assign (or 't' for Trunk): ";
-            std::string v_input;
-            std::cin >> v_input; clear_in();
+            std::stringstream ss_batch(batch_input);
+            std::string batch_segment;
             
-            bool is_trunk = false;
-            int v_id = 1;
-            
-            if (v_input == "t" || v_input == "T") {
-                is_trunk = true;
-            } else {
-                try {
-                    v_id = std::stoi(v_input);
-                } catch(...) {
-                    std::cout << Color::RED << "Invalid ID." << Color::RESET << "\n";
-                    continue;
+            while(std::getline(ss_batch, batch_segment, ',')) {
+                // Trim
+                batch_segment.erase(0, batch_segment.find_first_not_of(" \t\n\r"));
+                batch_segment.erase(batch_segment.find_last_not_of(" \t\n\r") + 1);
+                if (batch_segment.empty()) continue;
+                
+                size_t colon = batch_segment.find(':');
+                if(colon == std::string::npos) {
+                     std::cout << Color::RED << "Invalid format: " << batch_segment << " (missing :)" << Color::RESET << "\n";
+                     continue;
                 }
                 
-                if (!vlan_exists(v_id)) {
-                    std::cout << "VLAN " << v_id << " not defined. Create it? (y/n): ";
-                    char c; std::cin >> c; clear_in();
-                    if (c == 'y' || c == 'Y') {
-                        std::cout << "Name for VLAN " << v_id << ": ";
-                        std::string vname; std::getline(std::cin, vname);
-                        add_vlan(v_id, vname);
-                    } else {
-                        std::cout << "Cancelled.\n";
-                        continue;
+                std::string ports_str = batch_segment.substr(0, colon);
+                std::string vlan_str = batch_segment.substr(colon + 1);
+                
+                // Parse ports
+                std::vector<std::string> ports = parse_interface_range(ports_str);
+                
+                // Parse VLAN/Trunk
+                bool is_trunk = (vlan_str == "t" || vlan_str == "T");
+                int v_id = 1;
+                
+                if(!is_trunk) {
+                    try { 
+                        v_id = std::stoi(vlan_str); 
+                        if(!vlan_exists(v_id)) {
+                             // Auto define if missing for speed
+                             add_vlan(v_id, "VLAN_" + std::to_string(v_id));
+                        }
+                    } 
+                    catch(...) { 
+                        std::cout << Color::RED << "Invalid VLAN: " << vlan_str << Color::RESET << "\n"; continue; 
                     }
                 }
+                
+                assign_vlan_to_ports(target_sw, ports, v_id, is_trunk);
             }
-            
-            assign_vlan_to_ports(target_sw, ports, v_id, is_trunk);
-            std::cout << Color::GREEN << Icon::CHECK << " Ports updated successfully." << Color::RESET << "\n";
+            std::cout << Color::GREEN << "✅ Batch update voltooid." << Color::RESET << "\n";
         }
         else if (opt == 4) {
             delete_vlan(devices);
