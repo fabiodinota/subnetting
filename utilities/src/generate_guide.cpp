@@ -355,10 +355,32 @@ void menu_generate_guide(const std::vector<Device*>& devices, const std::vector<
         // PASS 2: DHCP Pools
         struct DHCPPool { std::string name, network, mask, gateway; bool upper_half_only; };
         std::vector<DHCPPool> dhcp_pools;
+        
+        // Calculate absolute device index for this router
+        int abs_idx = -1;
+        for(size_t k = 0; k < devices.size(); ++k) {
+            if(devices[k] == d) { abs_idx = (int)k; break; }
+        }
+
         for (auto n : subnets) {
-            if (n->is_split || !n->dhcp_enabled) continue;
-            bool is_local = (n->dhcp_server_id == this_router_idx) || (n->dhcp_server_id == -1 && n->dhcp_helper_ip.empty() && n->get_assignment().find(r->get_hostname()) != std::string::npos);
-            if (is_local) {
+            if (n->is_split) continue;
+            
+            bool should_generate = false;
+            if (n->dhcp_enabled) {
+                if (n->dhcp_server_id != -1) {
+                    // Check if this router is the designated server (checking both ABSOLUTE device ID and RELATIVE router ID for compatibility)
+                    if (n->dhcp_server_id == abs_idx || n->dhcp_server_id == this_router_idx) {
+                        should_generate = true;
+                    }
+                } else {
+                    // ID is -1. Check if implicit local (No helper IP + Assigned to this router)
+                    if (n->dhcp_helper_ip.empty() && n->get_assignment().find(r->get_hostname()) != std::string::npos) {
+                        should_generate = true;
+                    }
+                }
+            }
+            
+            if (should_generate) {
                 std::string pool_name = !n->name.empty() ? "POOL_" + n->name : (n->associated_vlan_id > 1 ? "POOL_VLAN" + std::to_string(n->associated_vlan_id) : "POOL_LAN");
                 std::replace(pool_name.begin(), pool_name.end(), ' ', '_');
                 dhcp_pools.push_back({pool_name, address_to_str(n->get_address()), address_to_str(n->get_mask()), address_to_str(n->get_address() + 1), n->dhcp_upper_half_only});
