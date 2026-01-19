@@ -59,14 +59,19 @@ void StateManager::save(const std::vector<Device*>& devices, const std::vector<L
     }
 
     // [SUBNETS]
-    // # ID | Network | Slash | ParentID | Name | AssignedString | AssignedInterface | VlanID
+    // # ID | Network | Slash | ParentID | Name | AssignedString | AssignedInterface | VlanID | DHCPEnabled | DHCPUpperHalf | DHCPServerID | DHCPHelperIP
     file << "\n[SUBNETS]\n";
     for(auto n : subnets) {
+        std::string helper_ip = n->dhcp_helper_ip.empty() ? "NONE" : n->dhcp_helper_ip;
         file << n->id << "|" << address_to_str(n->get_address()) << "|" 
              << n->get_slash() << "|" << n->parent_id << "|"
              << (n->name.empty() ? "" : n->name) << "|"
              << n->get_assignment() << "|" << n->get_assigned_interface() 
-             << "|" << n->associated_vlan_id << "\n";
+             << "|" << n->associated_vlan_id
+             << "|" << (n->dhcp_enabled ? 1 : 0)
+             << "|" << (n->dhcp_upper_half_only ? 1 : 0)
+             << "|" << n->dhcp_server_id
+             << "|" << helper_ip << "\n";
     }
 
     // [DEVICE_CONFIGS]
@@ -114,6 +119,13 @@ void StateManager::save(const std::vector<Device*>& devices, const std::vector<L
         }
     }
 
+    // [STATIC_ROUTES]
+    // RouterID|DestNet|Mask|NextHop
+    file << "\n[STATIC_ROUTES]\n";
+    for(const auto& r : static_routes) {
+        file << r.router_id << "|" << r.dest_net << "|" << r.mask << "|" << r.next_hop << "\n";
+    }
+
     file.close();
     std::cout << "State saved to network_save.dat.\n";
 }
@@ -136,6 +148,8 @@ void StateManager::load(std::vector<Device*>& devices, std::vector<Link*>& links
     
     std::string line;
     std::string current_section;
+
+    static_routes.clear();
 
     while (std::getline(file, line)) {
         trim(line);
@@ -195,7 +209,7 @@ void StateManager::load(std::vector<Device*>& devices, std::vector<Link*>& links
             }
         }
         else if (current_section == "[SUBNETS]") {
-            // ID|Net|Slash|Parent|Name|Assigned|Interface|VlanID
+            // ID|Net|Slash|Parent|Name|Assigned|Interface|VlanID|DHCPEnabled|DHCPUpperHalf|DHCPServerID|DHCPHelperIP
             if (parts.size() >= 7) {
                 Network* n = new Network();
                 n->id = std::stoi(parts[0]);
@@ -216,6 +230,19 @@ void StateManager::load(std::vector<Device*>& devices, std::vector<Link*>& links
                 // Load associated VLAN ID if present (backward compatible)
                 if (parts.size() >= 8) {
                     try { n->associated_vlan_id = std::stoi(parts[7]); } catch(...) {}
+                }
+                
+                // Load DHCP configuration if present (backward compatible)
+                if (parts.size() >= 12) {
+                    try {
+                        n->dhcp_enabled = (std::stoi(parts[8]) == 1);
+                        n->dhcp_upper_half_only = (std::stoi(parts[9]) == 1);
+                        n->dhcp_server_id = std::stoi(parts[10]);
+                        std::string helper_str = parts[11];
+                        n->dhcp_helper_ip = (helper_str == "NONE") ? "" : helper_str;
+                    } catch(...) {
+                        // Defaults already set in Network struct
+                    }
                 }
                 
                 subnets.push_back(n);
@@ -278,6 +305,17 @@ void StateManager::load(std::vector<Device*>& devices, std::vector<Link*>& links
                         }
                     }
                 }
+            }
+        }
+        else if (current_section == "[STATIC_ROUTES]") {
+            // RouterID|DestNet|Mask|NextHop
+            if(parts.size() >= 4) {
+                StaticRoute r;
+                r.router_id = std::stoi(parts[0]);
+                r.dest_net = parts[1];
+                r.mask = parts[2];
+                r.next_hop = parts[3];
+                static_routes.push_back(r);
             }
         }
     }
@@ -393,7 +431,7 @@ bool StateManager::load_scenario(const std::string& filename, std::vector<Device
         }
         // [SUBNETS] Section - Store in temp map for hierarchy rebuild
         else if (current_section == "[SUBNETS]") {
-            // Format: ID|Network|Slash|ParentID|Name|AssignedTo|AssignedInterface
+            // Format: ID|Network|Slash|ParentID|Name|AssignedTo|AssignedInterface|VlanID|DHCPEnabled|DHCPUpperHalf|DHCPServerID|DHCPHelperIP
             if (parts.size() >= 7) {
                 Network* n = new Network();
                 n->id = std::stoi(parts[0]);
@@ -412,6 +450,24 @@ bool StateManager::load_scenario(const std::string& filename, std::vector<Device
                 n->name = parts[4];
                 n->set_assignment(parts[5]);
                 n->set_assigned_interface(parts[6]);
+                
+                // Load VLAN ID if present
+                if (parts.size() >= 8) {
+                    try { n->associated_vlan_id = std::stoi(parts[7]); } catch(...) {}
+                }
+                
+                // Load DHCP configuration if present (backward compatible)
+                if (parts.size() >= 12) {
+                    try {
+                        n->dhcp_enabled = (std::stoi(parts[8]) == 1);
+                        n->dhcp_upper_half_only = (std::stoi(parts[9]) == 1);
+                        n->dhcp_server_id = std::stoi(parts[10]);
+                        std::string helper_str = parts[11];
+                        n->dhcp_helper_ip = (helper_str == "NONE") ? "" : helper_str;
+                    } catch(...) {
+                        // Defaults already set in Network struct
+                    }
+                }
                 
                 subnet_map[n->id] = n;
                 subnets.push_back(n);

@@ -162,4 +162,13 @@ private:
     void determine_cable_type();
 };
 
+struct StaticRoute {
+    int router_id;
+    std::string dest_net;
+    std::string mask;
+    std::string next_hop;
+};
+
+extern std::vector<StaticRoute> static_routes;
+
 #endif

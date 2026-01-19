@@ -18,6 +18,7 @@
 #include "utilities.hpp"
 #include "vlan_manager.hpp"
 #include "presenter.hpp"    // For exam guide
+#include "generate_guide.hpp"
 #include "gui_layer.hpp"
 #include "colors.hpp"
 
@@ -83,6 +84,8 @@ void print_menu() {
     std::cout << Color::BLUE << "14. " << Color::RESET << "Password Manager\n";
     std::cout << Color::BLUE << "15. " << Color::RESET << Color::YELLOW << "Factory Reset (Exam Template)" << Color::RESET << "\n";
     std::cout << Color::BLUE << "16. " << Color::RESET << "Network Overview (Subnet-VLAN Map)\n";
+    std::cout << Color::BLUE << "17. " << Color::RESET << Color::RED << "🗑️  Nuclear Wipe (Delete Everything)" << Color::RESET << "\n";
+    std::cout << Color::BLUE << "18. " << Color::RESET << "🛣️  Configure Static Routes\n";
     std::cout << Color::BLUE << "0. " << Color::RESET << "Exit\n";
     std::cout << "Select: ";
 }
@@ -834,328 +837,6 @@ void print_dhcp_exclusions(const std::string& network_ip, const std::string& mas
     std::cout << "ip dhcp excluded-address " << address_to_str(start_ex) << " " << address_to_str(end_ex) << "\n";
 }
 
-void menu_generate_guide() {
-    std::cout << "\n" << Color::MAGENTA << Color::BOLD << "================ EXAM GUIDE ================" << Color::RESET << "\n";
-    
-    // ========================================
-    // SECTION 1: Physical Connections
-    // ========================================
-    std::cout << "\n" << Color::CYAN << "### PHYSICAL CONNECTIONS ###" << Color::RESET << "\n";
-    for (auto l : links) {
-        std::cout << "Connect " << Color::GREEN << l->device1->get_hostname() << " " << l->port1 << Color::RESET
-                  << " to " << Color::GREEN << l->device2->get_hostname() << " " << l->port2 << Color::RESET
-                  << " using a [" << l->get_cable_type_str() << "].\n";
-    }
-
-    // ========================================
-    // SECTION 2: Switch Configurations
-    // ========================================
-    std::cout << "\n" << Color::CYAN << "### SWITCH CONFIGURATIONS ###" << Color::RESET << "\n";
-    for (auto d : devices) {
-        if (d->get_type() != DeviceType::SWITCH) continue;
-        
-        Switch* sw = dynamic_cast<Switch*>(d);
-        std::cout << "\n" << Color::GREEN << "--- " << sw->get_hostname() << " ---" << Color::RESET << "\n";
-        std::cout << "enable\nconf t\n";
-        std::cout << "hostname " << sw->get_hostname() << "\n";
-        std::cout << "enable secret class\n";
-        
-        // Step A: Switch2 Special Case (Management Interface)
-        if (sw->get_hostname() == "Switch2") {
-            std::cout << "!\n! Management Interface (Switch2 Special)\n";
-            std::cout << "interface vlan 1\n";
-            std::cout << " ip address 192.168.50.2 255.255.255.0\n";
-            std::cout << " no shutdown\n";
-            std::cout << " exit\n";
-        }
-        
-        // Step B: Discover and Print VLANs
-        std::map<int, std::string> used_vlans;
-        for (auto& iface : sw->interfaces) {
-            if (iface.vlan_id > 1) {
-                if (VlanManager::vlan_exists(iface.vlan_id)) {
-                    used_vlans[iface.vlan_id] = VlanManager::get_vlan_name(iface.vlan_id);
-                } else {
-                    used_vlans[iface.vlan_id] = iface.vlan_name.empty() ? "VLAN" + std::to_string(iface.vlan_id) : iface.vlan_name;
-                }
-            }
-        }
-        
-        // Also add VLANs from VlanManager that may not be on interfaces yet
-        for (auto const& [vid, vname] : VlanManager::defined_vlans) {
-            if (vid > 1 && used_vlans.find(vid) == used_vlans.end()) {
-                used_vlans[vid] = vname;
-            }
-        }
-        
-        if (!used_vlans.empty()) {
-            std::cout << "!\n";
-            for (auto const& [id, name] : used_vlans) {
-                std::cout << "vlan " << id << "\n name " << name << "\n exit\n";
-            }
-        }
-        
-        // Step C: Force Trunks on Gig0/1 and Gig0/2
-        std::cout << "!\n! Trunk Ports (Forced)\n";
-        std::cout << "interface Gig0/1\n";
-        std::cout << " switchport mode trunk\n";
-        std::cout << " exit\n";
-        std::cout << "interface Gig0/2\n";
-        std::cout << " switchport mode trunk\n";
-        std::cout << " exit\n";
-        
-        // Step D: Access Ports (based on interface VLAN assignments)
-        bool has_access = false;
-        for (auto& iface : sw->interfaces) {
-            if (!iface.is_trunk && iface.vlan_id > 1) {
-                if (!has_access) {
-                    std::cout << "!\n! Access Ports\n";
-                    has_access = true;
-                }
-                std::cout << "interface " << iface.name << "\n";
-                std::cout << " switchport mode access\n";
-                std::cout << " switchport access vlan " << iface.vlan_id << "\n";
-                std::cout << " exit\n";
-            }
-        }
-        
-        // Step E: VTY Config (Switch2 gets Telnet, others default)
-        if (sw->get_hostname() == "Switch2") {
-            std::cout << "!\nline vty 0 15\n";
-            std::cout << " password admin\n";
-            std::cout << " transport input telnet\n";
-            std::cout << " login\n";
-            std::cout << " exit\n";
-        } else {
-            std::cout << "!\nline vty 0 15\n";
-            std::cout << " password admin\n";
-            std::cout << " login\n";
-            std::cout << " exit\n";
-        }
-        
-        std::cout << "!\nend\nwr\n";
-    }
-
-    // ========================================
-    // SECTION 3: Router Configurations
-    // ========================================
-    std::cout << "\n" << Color::CYAN << "### ROUTER CONFIGURATIONS ###" << Color::RESET << "\n";
-    for (auto d : devices) {
-        if (d->get_type() != DeviceType::ROUTER) continue;
-        
-        Router* r = dynamic_cast<Router*>(d);
-        std::cout << "\n" << Color::RED << "--- " << r->get_hostname() << " ---" << Color::RESET << "\n";
-        std::cout << "enable\nconf t\n";
-        std::cout << "hostname " << r->get_hostname() << "\n";
-        std::cout << "enable secret class\n";
-        
-        // Collect all subnets assigned to this router
-        std::vector<Network*> router_subnets;
-        for (auto n : subnets) {
-            if (n->is_split) continue;
-            std::string assignment = n->get_assignment();
-            if (assignment.find(r->get_hostname()) != std::string::npos) {
-                router_subnets.push_back(n);
-            }
-        }
-        
-        // Get router index for DHCP server matching
-        int this_router_idx = -1;
-        {
-            int idx = 0;
-            for (auto dev : devices) {
-                if (dev->get_type() == DeviceType::ROUTER) {
-                    if (dev == d) {
-                        this_router_idx = idx;
-                        break;
-                    }
-                    idx++;
-                }
-            }
-        }
-        
-        // Track base interfaces that need enabling
-        std::set<std::string> base_interfaces_used;
-        
-        // ===========================================
-        // PASS 1: Configure Interfaces (Physical/Logical Layer)
-        // ===========================================
-        for (auto n : router_subnets) {
-            std::string iface_name = n->get_assigned_interface();
-            int vlan_id = n->associated_vlan_id;
-            int cidr = n->get_slash();
-            
-            std::string net_str = address_to_str(n->get_address());
-            std::string mask_str = address_to_str(n->get_mask());
-            std::string gateway_str = address_to_str(n->get_address() + 1);
-            
-            // CASE A: VLAN Sub-interface (VLAN ID > 1)
-            if (vlan_id > 1) {
-                // Extract base interface name (e.g., "Gig0/1" from "Gig0/1.10")
-                std::string base_iface = iface_name;
-                size_t dot_pos = iface_name.find('.');
-                if (dot_pos != std::string::npos) {
-                    base_iface = iface_name.substr(0, dot_pos);
-                }
-                base_interfaces_used.insert(base_iface);
-                
-                std::cout << "!\n! VLAN " << vlan_id << " Subinterface\n";
-                std::cout << "interface " << iface_name << "\n";
-                std::cout << " encapsulation dot1q " << vlan_id << "\n";
-                std::cout << " ip address " << gateway_str << " " << mask_str << "\n";
-                
-                // IP Helper for remote DHCP
-                if (n->dhcp_enabled && !n->dhcp_helper_ip.empty()) {
-                    std::cout << " ip helper-address " << n->dhcp_helper_ip << "\n";
-                }
-                
-                std::cout << " no shutdown\n";
-                std::cout << " exit\n";
-            }
-            // CASE B: Physical/WAN Interface (VLAN <= 1)
-            else {
-                std::cout << "!\n";
-                if (cidr == 30) {
-                    std::cout << "! WAN Interface (/30)\n";
-                } else {
-                    std::cout << "! Physical LAN Interface\n";
-                }
-                std::cout << "interface " << iface_name << "\n";
-                std::cout << " ip address " << gateway_str << " " << mask_str << "\n";
-                
-                // IP Helper for remote DHCP (physical LANs)
-                if (n->dhcp_enabled && !n->dhcp_helper_ip.empty()) {
-                    std::cout << " ip helper-address " << n->dhcp_helper_ip << "\n";
-                }
-                
-                std::cout << " no shutdown\n";
-                std::cout << " exit\n";
-            }
-        }
-        
-        // Enable base interfaces for subinterfaces
-        for (const auto& base_iface : base_interfaces_used) {
-            std::cout << "!\n! Enable trunk interface\n";
-            std::cout << "interface " << base_iface << "\n";
-            std::cout << " no shutdown\n";
-            std::cout << " exit\n";
-        }
-        
-        // ===========================================
-        // PASS 2: Configure DHCP Pools (Service Layer)
-        // Scan ALL subnets where dhcp_server_id matches THIS router
-        // ===========================================
-        struct DHCPPool {
-            std::string name;
-            std::string network;
-            std::string mask;
-            std::string gateway;
-            bool upper_half_only;
-        };
-        std::vector<DHCPPool> dhcp_pools;
-        
-        for (auto n : subnets) {
-            if (n->is_split) continue;
-            if (!n->dhcp_enabled) continue;
-            
-            // Check if THIS router is the designated DHCP server
-            bool is_local_dhcp = (n->dhcp_server_id == this_router_idx);
-            bool is_local_without_id = (n->dhcp_server_id == -1 && n->dhcp_helper_ip.empty());
-            
-            // For local DHCP (server_id == -1 and no helper), check if subnet is assigned to this router
-            if (is_local_without_id) {
-                std::string assignment = n->get_assignment();
-                if (assignment.find(r->get_hostname()) == std::string::npos) {
-                    continue; // Not assigned to this router
-                }
-            }
-            
-            if (is_local_dhcp || is_local_without_id) {
-                std::string net_str = address_to_str(n->get_address());
-                std::string mask_str = address_to_str(n->get_mask());
-                std::string gateway_str = address_to_str(n->get_address() + 1);
-                
-                int vlan_id = n->associated_vlan_id;
-                std::string pool_name;
-                
-                if (!n->name.empty()) {
-                    pool_name = "POOL_" + n->name;
-                } else if (vlan_id > 1) {
-                    pool_name = "POOL_VLAN" + std::to_string(vlan_id);
-                } else {
-                    pool_name = "POOL_LAN";
-                }
-                std::replace(pool_name.begin(), pool_name.end(), ' ', '_');
-                
-                dhcp_pools.push_back({pool_name, net_str, mask_str, gateway_str, n->dhcp_upper_half_only});
-            }
-        }
-        
-        // Print DHCP Configuration
-        if (!dhcp_pools.empty()) {
-            std::cout << "!\n! --- DHCP Configuration ---\n";
-            
-            // Print exclusions
-            for (const auto& pool : dhcp_pools) {
-                unsigned int net_int = 0;
-                {
-                    int segments[4];
-                    sscanf(pool.network.c_str(), "%d.%d.%d.%d", &segments[0], &segments[1], &segments[2], &segments[3]);
-                    net_int = (segments[0] << 24) | (segments[1] << 16) | (segments[2] << 8) | segments[3];
-                }
-                
-                unsigned int mask_int = 0;
-                {
-                    int segments[4];
-                    sscanf(pool.mask.c_str(), "%d.%d.%d.%d", &segments[0], &segments[1], &segments[2], &segments[3]);
-                    mask_int = (segments[0] << 24) | (segments[1] << 16) | (segments[2] << 8) | segments[3];
-                }
-                
-                int cidr = 0;
-                for (int i = 0; i < 32; ++i) {
-                    if ((mask_int >> (31 - i)) & 1) cidr++;
-                    else break;
-                }
-                
-                unsigned int total_hosts = (1U << (32 - cidr));
-                unsigned int exclude_start, exclude_end;
-                
-                if (pool.upper_half_only) {
-                    // Exam Mode: Exclude lower half (Network+1 to Midpoint)
-                    unsigned int half = total_hosts / 2;
-                    exclude_start = net_int + 1;
-                    exclude_end = net_int + half - 1;
-                } else {
-                    // Standard Mode: Exclude gateway + 10 buffer
-                    exclude_start = net_int + 1;
-                    exclude_end = net_int + 10;
-                }
-                
-                std::cout << "ip dhcp excluded-address " << address_to_str(exclude_start) << " " << address_to_str(exclude_end) << "\n";
-            }
-            
-            std::cout << "!\n";
-            
-            // Print pools
-            for (const auto& pool : dhcp_pools) {
-                std::cout << "ip dhcp pool " << pool.name << "\n";
-                std::cout << " network " << pool.network << " " << pool.mask << "\n";
-                std::cout << " default-router " << pool.gateway << "\n";
-                std::cout << " exit\n";
-            }
-        }
-        
-        // VTY Config
-        std::cout << "!\nline vty 0 4\n";
-        std::cout << " password admin\n";
-        std::cout << " login\n";
-        std::cout << " exit\n";
-        
-        std::cout << "!\nend\nwr\n";
-    }
-    
-    std::cout << "\n" << Color::MAGENTA << "============================================" << Color::RESET << "\n";
-}
 
 void menu_configure_security() {
     std::cout << "\n--- Configure Device Security ---\n";
@@ -1243,12 +924,15 @@ void load_exam_scenario() {
 }
 
 void load_exam_template() {
-    std::cout << Color::MAGENTA << "\n--- Factory Reset: Load Exam Template ---" << Color::RESET << "\n";
-    std::cout << Color::YELLOW << Icon::WARN << " This will ERASE your current topology!" << Color::RESET << "\n";
+    std::cout << Color::MAGENTA << "\n--- Load Golden Exam Scenario ---" << Color::RESET << "\n";
+    std::cout << Color::YELLOW << Icon::WARN << " This will ERASE all current data and load the exam subnets!" << Color::RESET << "\n";
     std::cout << "Continue? (y/n): ";
     
     char c;
-    std::cin >> c;
+    if (!(std::cin >> c)) {
+        clear_input();
+        return;
+    }
     clear_input();
     
     if (c != 'y' && c != 'Y') {
@@ -1256,7 +940,7 @@ void load_exam_template() {
         return;
     }
     
-    // Phase 1: Clear existing state
+    // 1. Clear Existing Data
     for (auto d : devices) delete d;
     devices.clear();
     for (auto l : links) delete l;
@@ -1265,17 +949,13 @@ void load_exam_template() {
     subnets.clear();
     VlanManager::defined_vlans.clear();
     VlanManager::init();
-    
-    std::cout << "Creating exam topology...\n";
-    
-    // Phase 2: Create Devices
-    // Routers
+
+    // 2. Create Topology Devices
     Router* router0 = new Router("Router0");
     Router* router1 = new Router("Router1");
     devices.push_back(router0);
     devices.push_back(router1);
     
-    // Switches
     Switch* switch0 = new Switch("Switch0");
     Switch* switch1 = new Switch("Switch1");
     Switch* switch2 = new Switch("Switch2");
@@ -1283,7 +963,6 @@ void load_exam_template() {
     devices.push_back(switch1);
     devices.push_back(switch2);
     
-    // PCs and Laptops
     PC* pc0 = new PC("PC0");
     PC* laptop0 = new PC("Laptop0");
     PC* pc1 = new PC("PC1");
@@ -1297,86 +976,97 @@ void load_exam_template() {
     devices.push_back(pc2);
     devices.push_back(laptop2);
     
-    std::cout << Color::GREEN << Icon::CHECK << " Created " << devices.size() << " devices." << Color::RESET << "\n";
-    
-    // Phase 3: Create Connections
-    // Router0 <--> Switch0 (Gig0/1)
-    links.push_back(new Link(router0, "Gig0/0/0", switch0, "Gig0/1"));
-    
-    // Router1 <--> Switch1 (Gig0/1)
-    links.push_back(new Link(router1, "Gig0/0/0", switch1, "Gig0/1"));
-    
-    // Switch0 <--> Switch2 (Crossover trunk)
+    // 3. Create Links (Optimized for Exam Guide)
+    links.push_back(new Link(router0, "Gig0/1", switch0, "Gig0/1"));
+    links.push_back(new Link(router1, "Gig0/1", switch1, "Gig0/1"));
     links.push_back(new Link(switch0, "Gig0/2", switch2, "Gig0/2"));
+    links.push_back(new Link(router0, "Se0/1/0", router1, "Se0/1/0"));
     
-    // Router0 <--> Router1 (Serial WAN link)
-    links.push_back(new Link(router0, "Se0/1/0", router1, "Se0/1/1"));
-    
-    // PCs on Switch0
     links.push_back(new Link(pc0, "Fa0", switch0, "Fa0/1"));
     links.push_back(new Link(laptop0, "Fa0", switch0, "Fa0/2"));
-    
-    // PCs on Switch1
     links.push_back(new Link(pc1, "Fa0", switch1, "Fa0/1"));
     links.push_back(new Link(laptop1, "Fa0", switch1, "Fa0/2"));
-    
-    // PCs on Switch2
     links.push_back(new Link(pc2, "Fa0", switch2, "Fa0/1"));
     links.push_back(new Link(laptop2, "Fa0", switch2, "Fa0/2"));
-    
-    std::cout << Color::GREEN << Icon::CHECK << " Created " << links.size() << " connections." << Color::RESET << "\n";
-    
-    // Phase 4: Define VLANs
+
+    // 4. Define Golden VLANs
     VlanManager::add_vlan(10, "LAN_A");
     VlanManager::add_vlan(20, "LAN_B");
+
+    // 5. Define Golden Subnets
     
-    // Phase 5: Assign VLAN ports (PC ports = VLAN 10, Laptop ports = VLAN 20)
-    // Switch0
-    if (Interface* iface = switch0->get_interface("Fa0/1")) {
-        iface->vlan_id = 10;
-        iface->vlan_name = "LAN_A";
-    }
-    if (Interface* iface = switch0->get_interface("Fa0/2")) {
-        iface->vlan_id = 20;
-        iface->vlan_name = "LAN_B";
-    }
-    if (Interface* iface = switch0->get_interface("Gig0/2")) {
-        iface->is_trunk = true;
-    }
-    
-    // Switch1
-    if (Interface* iface = switch1->get_interface("Fa0/1")) {
-        iface->vlan_id = 10;
-        iface->vlan_name = "LAN_A";
-    }
-    if (Interface* iface = switch1->get_interface("Fa0/2")) {
-        iface->vlan_id = 20;
-        iface->vlan_name = "LAN_B";
-    }
-    
-    // Switch2
-    if (Interface* iface = switch2->get_interface("Fa0/1")) {
-        iface->vlan_id = 10;
-        iface->vlan_name = "LAN_A";
-    }
-    if (Interface* iface = switch2->get_interface("Fa0/2")) {
-        iface->vlan_id = 20;
-        iface->vlan_name = "LAN_B";
-    }
-    if (Interface* iface = switch2->get_interface("Gig0/2")) {
-        iface->is_trunk = true;
-    }
-    
-    std::cout << Color::GREEN << Icon::CHECK << " Configured VLAN assignments." << Color::RESET << "\n";
-    
-    // Summary
-    std::cout << "\n" << Color::GREEN << Color::BOLD << "=== Exam Template Loaded ===" << Color::RESET << "\n";
-    std::cout << "  " << Icon::ROUTER << " Routers: Router0, Router1\n";
-    std::cout << "  " << Icon::SWITCH << " Switches: Switch0, Switch1, Switch2\n";
-    std::cout << "  " << Icon::PC << " Endpoints: PC0, PC1, PC2, Laptop0, Laptop1, Laptop2\n";
-    std::cout << "  " << Icon::LINK << " Connections: " << links.size() << " (incl. Serial WAN + Trunk)\n";
-    std::cout << "  VLANs: 10 (LAN_A), 20 (LAN_B)\n";
-    std::cout << "\n" << Color::CYAN << "Ready for subnetting configuration!" << Color::RESET << "\n";
+    // LAN A: 192.168.1.32/27, VLAN 10, DHCP via Router1
+    Network* lanA = new Network();
+    lanA->id = 1; lanA->name = "LAN A";
+    lanA->set_address(str_to_address("192.168.1.32"));
+    lanA->set_slash(27);
+    lanA->set_mask((~0u) << (32 - 27));
+    lanA->set_assignment("Router0");
+    lanA->set_assigned_interface("Gig0/1.10");
+    lanA->associated_vlan_id = 10;
+    lanA->dhcp_enabled = true;
+    lanA->dhcp_server_id = 1; // Served by Router1
+    lanA->dhcp_helper_ip = "192.168.1.130";
+    lanA->dhcp_upper_half_only = true;
+    subnets.push_back(lanA);
+
+    // LAN B: 192.168.1.64/27, VLAN 20, DHCP via Router1
+    Network* lanB = new Network();
+    lanB->id = 2; lanB->name = "LAN B";
+    lanB->set_address(str_to_address("192.168.1.64"));
+    lanB->set_slash(27);
+    lanB->set_mask((~0u) << (32 - 27));
+    lanB->set_assignment("Router0");
+    lanB->set_assigned_interface("Gig0/1.20");
+    lanB->associated_vlan_id = 20;
+    lanB->dhcp_enabled = true;
+    lanB->dhcp_server_id = 1; // Served by Router1
+    lanB->dhcp_helper_ip = "192.168.1.130";
+    lanB->dhcp_upper_half_only = true;
+    subnets.push_back(lanB);
+
+    // LAN C: 192.168.1.96/27, Physical LAN on Router1
+    Network* lanC = new Network();
+    lanC->id = 3; lanC->name = "LAN C";
+    lanC->set_address(str_to_address("192.168.1.96"));
+    lanC->set_slash(27);
+    lanC->set_mask((~0u) << (32 - 27));
+    lanC->set_assignment("Router1");
+    lanC->set_assigned_interface("Gig0/1");
+    lanC->associated_vlan_id = 1; // Physical
+    lanC->dhcp_enabled = false; // Static
+    subnets.push_back(lanC);
+
+    // LAN D (WAN): 192.168.1.128/30
+    Network* lanD = new Network();
+    lanD->id = 4; lanD->name = "LAN D";
+    lanD->set_address(str_to_address("192.168.1.128"));
+    lanD->set_slash(30);
+    lanD->set_mask((~0u) << (32 - 30));
+    lanD->set_assignment("Router0");
+    lanD->set_assigned_interface("Se0/1/0");
+    lanD->associated_vlan_id = 0;
+    lanD->dhcp_enabled = false;
+    subnets.push_back(lanD);
+
+    // 6. Configure VLAN Port Assignments
+    // Switch0 (Connects to Router0)
+    VlanManager::assign_vlan_to_ports(switch0, {"Fa0/1"}, 10, false);
+    VlanManager::assign_vlan_to_ports(switch0, {"Fa0/2"}, 20, false);
+
+    // Switch2 (Connects to Switch0)
+    VlanManager::assign_vlan_to_ports(switch2, {"Fa0/1"}, 10, false);
+    VlanManager::assign_vlan_to_ports(switch2, {"Fa0/2"}, 20, false);
+
+    // Switch1 (Connects to Router1)
+    // Physical network (Default VLAN 1)
+
+    // 7. Feedback
+    std::cout << "\n" << Color::GREEN << "✅ Exam Template & VLANs Loaded Successfully!" << Color::RESET << "\n";
+    std::cout << Color::YELLOW << "Note: Devices have been reset to the specific exam scenario." << Color::RESET << "\n";
+    std::cout << "  - Routers: 2, Switches: 3, PCs: 6\n";
+    std::cout << "  - Subnets: 4 (LAN A, B, C, D)\n";
+    std::cout << "  - VLAN Assignments: Switch0/Switch2 Ports configured for VLAN 10/20\n";
 }
 
 void show_network_overview() {
@@ -1692,7 +1382,7 @@ void run_cli_mode() {
             case 1: menu_add_device(); break;
             case 2: menu_connect_devices(); break;
             case 3: menu_configure_subnets(); break;
-            case 4: menu_generate_guide(); break;
+            case 4: menu_generate_guide(devices, links, subnets); break;
             case 5: Visualizer::draw(devices, links, subnets); break;
             case 6: menu_configure_security(); break;
             case 7: VlanManager::menu_manage_vlans(devices); break;
@@ -1705,6 +1395,101 @@ void run_cli_mode() {
             case 14: menu_password_manager(); break;
             case 15: load_exam_template(); break;
             case 16: show_network_overview(); break;
+            case 17: {
+                std::cout << Color::RED << "Are you sure you want to delete EVERYTHING? (y/n): " << Color::RESET;
+                char c;
+                if (std::cin >> c) {
+                    clear_input();
+                    if (c == 'y' || c == 'Y') {
+                        for (auto d : devices) delete d;
+                        devices.clear();
+                        for (auto l : links) delete l;
+                        links.clear();
+                        for (auto n : subnets) delete n;
+                        subnets.clear();
+                        VlanManager::defined_vlans.clear();
+                        VlanManager::init();
+                        static_routes.clear();
+                        std::cout << Color::RED << "\n💥 All data has been incinerated." << Color::RESET << "\n";
+                    } else {
+                        std::cout << "Operation cancelled.\n";
+                    }
+                }
+                break;
+            }
+            case 18: {
+                while(true) {
+                    std::cout << "\n--- Static Route Manager ---\n";
+                    std::cout << "1. Add Route\n";
+                    std::cout << "2. View/Delete Routes\n";
+                    std::cout << "0. Back\n";
+                    std::cout << "Select: ";
+                    int sopt;
+                    if(!(std::cin >> sopt)) { clear_input(); continue; }
+                    clear_input();
+                    
+                    if (sopt == 0) break;
+                    
+                    if (sopt == 1) {
+                         std::cout << "Available Routers:\n";
+                         std::vector<int> router_ids;
+                         for(size_t i=0; i<devices.size(); ++i) {
+                             if(devices[i]->get_type() == DeviceType::ROUTER) {
+                                 std::cout << "[" << i << "] " << devices[i]->get_hostname() << "\n";
+                                 router_ids.push_back((int)i);
+                             }
+                         }
+                         if(router_ids.empty()) { std::cout << "No routers found.\n"; continue; }
+                         
+                         std::cout << "Select Router ID: ";
+                         int rid; 
+                         if(!(std::cin >> rid)) { clear_input(); continue; }
+                         clear_input();
+                         
+                         bool valid = false;
+                         for(int id : router_ids) if(id == rid) valid = true;
+                         if(!valid) { std::cout << "Invalid Router ID.\n"; continue; }
+                         
+                         std::string dest, mask, hop;
+                         std::cout << "Destination Network (0.0.0.0 for Default): ";
+                         std::getline(std::cin, dest); trim(dest);
+                         
+                         std::cout << "Subnet Mask (0.0.0.0 for Default): ";
+                         std::getline(std::cin, mask); trim(mask);
+                         
+                         std::cout << "Next Hop IP Address: ";
+                         std::getline(std::cin, hop); trim(hop);
+                         
+                         static_routes.push_back({rid, dest, mask, hop});
+                         std::cout << Color::GREEN << "✅ Route Added." << Color::RESET << "\n";
+                    }
+                    else if (sopt == 2) {
+                        if(static_routes.empty()) { std::cout << "No routes defined.\n"; continue; }
+                        
+                        std::cout << "\nCannot undo deletions!\n";
+                        for(size_t i=0; i<static_routes.size(); ++i) {
+                            StaticRoute& r = static_routes[i];
+                            std::string hostname = "Unknown";
+                            if(r.router_id >= 0 && r.router_id < (int)devices.size()) 
+                                hostname = devices[r.router_id]->get_hostname();
+                            
+                            std::cout << "[" << i+1 << "] " << hostname << ": ip route " 
+                                      << r.dest_net << " " << r.mask << " " << r.next_hop << "\n";
+                        }
+                        
+                        std::cout << "Enter Route ID to delete (or 0 to cancel): ";
+                        int did;
+                        if(!(std::cin >> did)) { clear_input(); continue; }
+                        clear_input();
+                        
+                        if(did > 0 && did <= (int)static_routes.size()) {
+                            static_routes.erase(static_routes.begin() + (did - 1));
+                            std::cout << Color::RED << "Route deleted." << Color::RESET << "\n";
+                        }
+                    }
+                }
+                break;
+            }
             case 0: exit(0);
             default: std::cout << "Invalid option.\n";
         }

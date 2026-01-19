@@ -55,5 +55,6 @@ public:
 };
 
 std::string address_to_str(int address);
+unsigned int str_to_address(const std::string& ip);
 
 #endif

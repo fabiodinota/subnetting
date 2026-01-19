@@ -1,8 +1,6 @@
 #include <network.hpp>
 #include <logging.hpp>
-
-
-// External class functions definitions
+#include <cstdio>
 
 std::string address_to_str(int address)
 {
@@ -14,6 +12,14 @@ std::string address_to_str(int address)
         str_address.append((bits -= 8) > -1 ? "." : "");
     }
     return str_address;
+}
+
+unsigned int str_to_address(const std::string& ip) {
+    int s[4];
+    if (sscanf(ip.c_str(), "%d.%d.%d.%d", &s[0], &s[1], &s[2], &s[3]) == 4) {
+        return (s[0] << 24) | (s[1] << 16) | (s[2] << 8) | s[3];
+    }
+    return 0;
 }
 
 // Network class definition

@@ -3,6 +3,7 @@
 #include <algorithm>
 
 // --- Device ---
+std::vector<StaticRoute> static_routes;
 Device::Device(std::string name, DeviceType t, std::string m)
     : hostname(name), type(t), model(m) {}
 
