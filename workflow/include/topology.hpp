@@ -31,6 +31,9 @@ struct Interface {
     int vlan_id = 1;
     bool is_trunk = false;
     std::string vlan_name = "default";
+    
+    // Manual IP Override
+    std::string manual_ip = ""; // If set, overrides default/DHCP assigned IP
 };
 
 class Device {

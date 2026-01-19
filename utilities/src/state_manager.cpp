@@ -71,7 +71,8 @@ void StateManager::save(const std::vector<Device*>& devices, const std::vector<L
              << "|" << (n->dhcp_enabled ? 1 : 0)
              << "|" << (n->dhcp_upper_half_only ? 1 : 0)
              << "|" << n->dhcp_server_id
-             << "|" << helper_ip << "\n";
+             << "|" << helper_ip 
+             << "|" << n->gateway_manual_ip << "\n";
     }
 
     // [DEVICE_CONFIGS]
@@ -102,7 +103,12 @@ void StateManager::save(const std::vector<Device*>& devices, const std::vector<L
                  if (iface.vlan_id > 1 || iface.is_trunk) {
                      file << i << "|" << iface.name << "|" 
                           << iface.vlan_id << "|" 
-                          << (iface.is_trunk ? "1" : "0") << "\n";
+                          << (iface.is_trunk ? "1" : "0") << "|0.0.0.0|0.0.0.0|" << iface.manual_ip << "\n";
+                 } else if(!iface.manual_ip.empty()) {
+                      // Even if not VLAN/Trunk, save if manual IP is set
+                     file << i << "|" << iface.name << "|" 
+                          << iface.vlan_id << "|" 
+                          << (iface.is_trunk ? "1" : "0") << "|0.0.0.0|0.0.0.0|" << iface.manual_ip << "\n";
                  }
              }
         }
@@ -113,9 +119,16 @@ void StateManager::save(const std::vector<Device*>& devices, const std::vector<L
             // Expanding format for router
             for(auto& sub : r->subinterfaces) {
                  std::string fullname = sub.interface_name.empty() ? ("g0/0/0." + std::to_string(sub.id)) : sub.interface_name;
-                 file << i << "|" << fullname << "|" << sub.vlan_id << "|0|" 
-                      << sub.ip_address << "|" << sub.subnet_mask << "\n";
-            }
+                  // Format: DeviceID | Name | VLAN | IsTrunk | SubIP | SubMask | ManualIP
+                  file << i << "|" << fullname << "|" << sub.vlan_id << "|0|" 
+                       << sub.ip_address << "|" << sub.subnet_mask << "|\n"; // No manual IP for subinterface defined in router struct yet, simplistic
+             }
+             // Save physical interfaces manual IP
+             for(auto& iface : r->interfaces) {
+                 if(!iface.manual_ip.empty()) {
+                     file << i << "|" << iface.name << "|1|0|0.0.0.0|0.0.0.0|" << iface.manual_ip << "\n";
+                 }
+             }
         }
     }
 
@@ -526,6 +539,15 @@ bool StateManager::load_scenario(const std::string& filename, std::vector<Device
                         }
                         
                         r->configure_roas(sub_id, vid, ip, mask, ifname);
+                    }
+                    
+                    // Restore Manual IP if present
+                    if (parts.size() >= 7) {
+                        std::string manual = parts[6];
+                        if (!manual.empty()) {
+                             Interface* iface = d->get_interface(ifname);
+                             if(iface) iface->manual_ip = manual;
+                        }
                     }
                 }
             }

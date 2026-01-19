@@ -250,14 +250,12 @@ void menu_generate_guide(const std::vector<Device*>& devices, const std::vector<
             }
         }
         
+        // Use global device index to match main.cpp
         int this_router_idx = -1;
-        {
-            int idx = 0;
-            for (auto dev : devices) {
-                if (dev->get_type() == DeviceType::ROUTER) {
-                    if (dev == d) { this_router_idx = idx; break; }
-                    idx++;
-                }
+        for (size_t k = 0; k < devices.size(); ++k) {
+            if (devices[k] == d) {
+                this_router_idx = (int)k;
+                break;
             }
         }
         
@@ -279,7 +277,27 @@ void menu_generate_guide(const std::vector<Device*>& devices, const std::vector<
                         std::string mask_str = address_to_str(n->get_mask());
                         std::cout << CYAN << "!\n! WAN Peer Interface (Link to " << other_device->get_hostname() << ")" << RESET << "\n";
                         std::cout << YELLOW << " interface " << BLUE << my_port << RESET << "\n";
-                        std::cout << YELLOW << " ip address " << WHITE << peer_ip << " " << mask_str << RESET << "\n";
+                        
+                        // Smart IP for WAN Peer (Router side of things)
+                        // If I am Router0, I usually take .1. If Router1, .2
+                        // But strictly we rely on the logic:
+                        // If n->gateway_manual_ip is set for THIS router on this subnet, use it.
+                        // Wait, 'n' is the subnet. 'gateway_manual_ip' is usually for the Router that OWNS the subnet (Gateway).
+                        // WAN links are shared. We need to know WHICH IP belongs to THIS router.
+                        // For WAN, we don't store individual IPs in 'Network' struct easily for both sides.
+                        // We'll trust the Smart Default here relative to Hostname for simplicity, or look at Interface manual_ip.
+                        
+                        std::string my_ip;
+                        Interface* my_iface = r->get_interface(my_port);
+                        if (my_iface && !my_iface->manual_ip.empty()) {
+                            my_ip = my_iface->manual_ip;
+                        } else {
+                            // Fallback Smart Default
+                            if (r->get_hostname() == "Router1") my_ip = address_to_str(n->get_address() + 2);
+                            else my_ip = address_to_str(n->get_address() + 1);
+                        }
+                        
+                        std::cout << YELLOW << " ip address " << WHITE << my_ip << " " << mask_str << RESET << "\n";
                         
                         // Clock Rate logic for DCE (Router0)
                         if ((my_port.find("Se") == 0 || my_port.find("se") == 0) && (this_router_idx == 0 || r->get_hostname() == "Router0")) {
@@ -299,7 +317,26 @@ void menu_generate_guide(const std::vector<Device*>& devices, const std::vector<
             int vlan_id = n->associated_vlan_id;
             int cidr = n->get_slash();
             std::string mask_str = address_to_str(n->get_mask());
-            std::string gateway_str = address_to_str(n->get_address() + 1);
+            // Gateway IP Logic (Smart Defaults & Manual Override)
+            std::string gateway_str;
+            if (!n->gateway_manual_ip.empty()) {
+                gateway_str = n->gateway_manual_ip;
+            } else {
+                // Smart Defaults
+                if (cidr == 30) {
+                     // WAN Link
+                     if (r->get_hostname() == "Router1") {
+                         // Router1 gets the second/last usable IP on WAN
+                         gateway_str = address_to_str(n->get_address() + 2);
+                     } else {
+                         // Router0 or others get the first usable
+                         gateway_str = address_to_str(n->get_address() + 1);
+                     }
+                } else {
+                    // Standard LAN Gateway: First Usable
+                    gateway_str = address_to_str(n->get_address() + 1);
+                }
+            }
             
             std::string dhcp_mode_tag = "";
             if (cidr >= 30) dhcp_mode_tag = std::string(CYAN) + "! DHCP Mode: None (WAN Link)" + RESET;
@@ -353,14 +390,8 @@ void menu_generate_guide(const std::vector<Device*>& devices, const std::vector<
         }
         
         // PASS 2: DHCP Pools
-        struct DHCPPool { std::string name, network, mask, gateway; bool upper_half_only; };
+        struct DHCPPool { std::string name; std::string network; std::string mask; std::string gateway; bool upper_half_only; };
         std::vector<DHCPPool> dhcp_pools;
-        
-        // Calculate absolute device index for this router
-        int abs_idx = -1;
-        for(size_t k = 0; k < devices.size(); ++k) {
-            if(devices[k] == d) { abs_idx = (int)k; break; }
-        }
 
         for (auto n : subnets) {
             if (n->is_split) continue;
@@ -368,8 +399,8 @@ void menu_generate_guide(const std::vector<Device*>& devices, const std::vector<
             bool should_generate = false;
             if (n->dhcp_enabled) {
                 if (n->dhcp_server_id != -1) {
-                    // Check if this router is the designated server (checking both ABSOLUTE device ID and RELATIVE router ID for compatibility)
-                    if (n->dhcp_server_id == abs_idx || n->dhcp_server_id == this_router_idx) {
+                    // Check absolute device ID (harmonized with main.cpp)
+                    if (n->dhcp_server_id == this_router_idx) {
                         should_generate = true;
                     }
                 } else {
@@ -391,10 +422,33 @@ void menu_generate_guide(const std::vector<Device*>& devices, const std::vector<
             std::cout << CYAN << "!\n! --- DHCP Configuration ---" << RESET << "\n";
             for (const auto& pool : dhcp_pools) {
                 unsigned int mask_int = str_to_address(pool.mask);
-                int cidr = 0; for(int i=0; i<32; ++i) if((mask_int>>(31-i))&1) cidr++; else break;
+                int cidr = 0; while((mask_int << cidr) & 0x80000000) cidr++; 
+                
                 unsigned int net_int = str_to_address(pool.network);
-                unsigned int total = (1U << (32 - cidr));
-                unsigned int ex_start = net_int + 1, ex_end = pool.upper_half_only ? (net_int + (total/2) - 1) : (net_int + 10);
+                unsigned int total = (1U << (32 - cidr)); // Total size of subnet
+                
+                unsigned int ex_start = net_int + 1; // Start excluding from first usable
+                unsigned int ex_end = ex_start + 10; // Default: first 10
+                
+                if (pool.upper_half_only) {
+                    // Higher Half Rule: Exclude Lower Half
+                    // Lower Half Range: Network ... (Network + Total/2 - 1)
+                    // We must exclude from .1 to (Total/2 - 1)
+                    // Actually, Gateway is usually .1, so exclude .1 to .((Total/2)-1)
+                    // Example /27 (32 IPs): 
+                    // Lower: .0 - .15 (Usable .1 - .14). Upper: .16 - .31 (Usable .17 - .30)
+                    // Exclude: .1 to .15 (wait, .15 is broadcast of lower? No, just split line)
+                    // Correct: Exclude LOWEST IPs. DHCP pool usually serves from top down or bottom up?
+                    // Cisco 'network' command enables the whole range. We must exclude the lower chunk.
+                    // Exclude range: [First Usable,  MidPoint - 1]
+                    // If total=32, half=16. Network=.0. Mid=.16.
+                    // We want pool to start at .17? Or .16?
+                    // Usually "Higher Half" means the pool is the upper block.
+                    // So we exclude the lower block: .1 to .15. 
+                    // ex_end = net_int + (total / 2) - 1;
+                    ex_end = net_int + (total / 2) - 1;
+                }
+                
                 std::cout << YELLOW << "ip dhcp excluded-address " << WHITE << address_to_str(ex_start) << " " << address_to_str(ex_end) << RESET << "\n";
             }
             std::cout << CYAN << "!" << RESET << "\n";
@@ -403,6 +457,34 @@ void menu_generate_guide(const std::vector<Device*>& devices, const std::vector<
                 std::cout << YELLOW << " network " << WHITE << pool.network << " " << pool.mask << RESET << "\n";
                 std::cout << YELLOW << " default-router " << WHITE << pool.gateway << RESET << "\n exit\n";
             }
+        }
+        
+        // PASS 3: Generate Static Assignments (LAN C End Devices)
+        // If this router serves a static subnet (no DHCP), list the static config for attached devices.
+        // This is strictly "Documentation/Guide" output, usually specific to the devices themselves, 
+        // but user asked for "Plan" output. We'll append it here.
+        
+        for (auto n : subnets) {
+             if (n->is_split || n->get_slash() >= 30) continue;
+             if (!n->dhcp_enabled && n->get_assignment().find(r->get_hostname()) != std::string::npos) {
+                 // Static Subnet (e.g. LAN C)
+                 std::cout << CYAN << "!\n! --- Static Device Plan for " << n->name << " ---" << RESET << "\n";
+                 
+                 // PC (Network + 2)
+                 std::string pc_ip = address_to_str(n->get_address() + 2);
+                 std::cout << CYAN << "! PC " << n->name << ": " << WHITE << pc_ip << " " << address_to_str(n->get_mask()) << " GW: " << address_to_str(n->get_address() + 1) << RESET << "\n";
+                 
+                 // Laptop (Network + 3)
+                 std::string laptop_ip = address_to_str(n->get_address() + 3);
+                 std::cout << CYAN << "! Laptop " << n->name << ": " << WHITE << laptop_ip << " " << address_to_str(n->get_mask()) << " GW: " << address_to_str(n->get_address() + 1) << RESET << "\n";
+                 
+                 // Switch (Last Usable)
+                 unsigned int net_int = n->get_address();
+                 int cidr = n->get_slash();
+                 unsigned int broadcast = net_int | ((1U << (32 - cidr)) - 1);
+                 std::string switch_ip = address_to_str(broadcast - 1);
+                 std::cout << CYAN << "! Switch " << n->name << ": " << WHITE << switch_ip << " " << address_to_str(n->get_mask()) << " GW: " << address_to_str(n->get_address() + 1) << RESET << "\n";
+             }
         }
         
         std::cout << CYAN << "!\n! VTY Configuration" << RESET << "\n";

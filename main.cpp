@@ -727,6 +727,24 @@ void menu_configure_subnets() {
                     selected_net->set_assigned_interface(final_iface);
                     selected_net->set_assignment("Assigned: " + rname + " - " + final_iface);
                     
+                    // Manual IP Override Prompt
+                    std::string default_gateway = address_to_str(selected_net->get_address() + 1);
+                    std::cout << "Default Gateway IP is " << default_gateway << ".\n";
+                    std::cout << "Enter custom IP to override, or press ENTER to keep default: ";
+                    std::string manual_gw; std::getline(std::cin, manual_gw);
+                    // trim(manual_gw); // trim helper not visible here, assume user input is clean or use simple check
+                    if (!manual_gw.empty() && manual_gw.find_first_not_of(" \t") != std::string::npos) {
+                        selected_net->gateway_manual_ip = manual_gw;
+                        std::cout << Color::GREEN << "✅ Gateway Override: " << manual_gw << Color::RESET << "\n";
+                        
+                        // Also set on interface if found (complicated for subinterfaces, but let's try base interface)
+                        // If it's a subinterface, we might not have a direct object in 'interfaces' unless we created one.
+                        // Routers use subinterfaces struct.
+                        // For now, storing in Network object is sufficient for guide generation.
+                    } else {
+                        selected_net->gateway_manual_ip = ""; // Reset
+                    }
+
                     // DHCP Configuration (only for non-WAN subnets)
                     int cidr = selected_net->get_slash();
                     if (cidr < 30) {
@@ -857,6 +875,42 @@ void menu_configure_subnets() {
                     if (vname.empty()) vname = (selected_net->name.empty() ? "VLAN"+v_input : selected_net->name);
                     
                     sw->add_vlan(vid, vname);
+                    
+                    // Static / Manual IP for Switch SVI?
+                    // Typically switches in this lab have management IP on a specific VLAN.
+                    // If this assignment is meant to link the subnet to the switch SVI.
+                    std::cout << "Configure Management IP for this VLAN on " << sname << "? (y/n): ";
+                    char mgmt_c; std::cin >> mgmt_c; clear_input();
+                    if(mgmt_c == 'y' || mgmt_c == 'Y') {
+                        // Calculate Smart Default: Last Usable
+                        unsigned int net_addr = selected_net->get_address();
+                        int cidr_slash = selected_net->get_slash();
+                        unsigned int broadcast = net_addr | ((1U << (32 - cidr_slash)) - 1);
+                        std::string default_mgmt = address_to_str(broadcast - 1);
+                        
+                        std::cout << "Default Management IP (Last Usable): " << default_mgmt << "\n";
+                        std::cout << "Enter custom IP or press ENTER to keep: ";
+                        std::string manual_mgmt; std::getline(std::cin, manual_mgmt);
+                        
+                        // Store in switch interface
+                        // We need to find or create the SVI interface "vlan X"
+                        std::string svi_name = "vlan " + std::to_string(vid);
+                        Interface* iface = sw->get_interface(svi_name);
+                        if (!iface) {
+                            sw->add_interface(svi_name);
+                            iface = sw->get_interface(svi_name);
+                        }
+                        
+                        if (!manual_mgmt.empty() && manual_mgmt.find_first_not_of(" \t") != std::string::npos) {
+                            iface->manual_ip = manual_mgmt;
+                             // Also update device config for consistency?
+                             sw->management_config.management_svi_ip = manual_mgmt;
+                        } else {
+                            iface->manual_ip = default_mgmt;
+                            sw->management_config.management_svi_ip = default_mgmt;
+                        }
+                        std::cout << Color::GREEN << "✅ Management IP Configured." << Color::RESET << "\n";
+                    }
                     
                     // We store "VLAN " + input as the interface string representation
                     selected_net->set_assigned_interface("VLAN " + v_input);

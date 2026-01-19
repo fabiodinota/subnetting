@@ -38,6 +38,11 @@ public:
 
     bool is_split = false;
     std::string name = "";
+    std::string vlan_name = "default";
+    
+    // Manual IP Override
+    std::string manual_ip = ""; // If set, overrides default/DHCP assigned IP
+
 
     // VLAN Association
     int associated_vlan_id = 0; // 0 = Physical/No VLAN
@@ -47,6 +52,10 @@ public:
     bool dhcp_upper_half_only = false;  // Exam mode: exclude lower half
     int dhcp_server_id = -1;            // ID of router serving DHCP (-1 = local/current)
     std::string dhcp_helper_ip = "";    // IP address of remote DHCP server (for ip helper-address)
+    
+    // Manual IP Override
+    std::string gateway_manual_ip = ""; // If set, overrides automatic gateway calculation
+
 
     // Hierarchy
     int id = 0;
