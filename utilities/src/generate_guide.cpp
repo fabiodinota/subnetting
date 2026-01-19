@@ -237,8 +237,14 @@ void menu_generate_guide(const std::vector<Device*>& devices, const std::vector<
                         std::string peer_ip = address_to_str(n->get_address() + 2);
                         std::string mask_str = address_to_str(n->get_mask());
                         std::cout << CYAN << "!\n! WAN Peer Interface (Link to " << other_device->get_hostname() << ")" << RESET << "\n";
-                        std::cout << YELLOW << "interface " << BLUE << my_port << RESET << "\n";
+                        std::cout << YELLOW << " interface " << BLUE << my_port << RESET << "\n";
                         std::cout << YELLOW << " ip address " << WHITE << peer_ip << " " << mask_str << RESET << "\n";
+                        
+                        // Clock Rate logic for DCE (Router0)
+                        if ((my_port.find("Se") == 0 || my_port.find("se") == 0) && (this_router_idx == 0 || r->get_hostname() == "Router0")) {
+                             std::cout << YELLOW << " clock rate 64000" << RESET << "\n";
+                        }
+                        
                         std::cout << GREEN << " no shutdown" << RESET << "\n exit\n";
                         break;
                     }
@@ -276,9 +282,15 @@ void menu_generate_guide(const std::vector<Device*>& devices, const std::vector<
                 std::cout << CYAN << "!" << RESET << "\n";
                 if (cidr == 30) std::cout << CYAN << "! WAN Interface (/30)" << RESET << "\n";
                 else std::cout << CYAN << "! Physical LAN Interface" << RESET << "\n" << dhcp_mode_tag << "\n";
-                std::cout << YELLOW << "interface " << BLUE << iface_name << RESET << "\n";
+                std::cout << YELLOW << " interface " << BLUE << iface_name << RESET << "\n";
                 std::cout << YELLOW << " ip address " << WHITE << gateway_str << " " << mask_str << RESET << "\n";
                 if (n->dhcp_enabled && !n->dhcp_helper_ip.empty()) std::cout << YELLOW << " ip helper-address " << MAGENTA << n->dhcp_helper_ip << RESET << "\n";
+                
+                // Clock Rate logic for DCE (Router0)
+                if ((iface_name.find("Se") == 0 || iface_name.find("se") == 0) && (this_router_idx == 0 || r->get_hostname() == "Router0")) {
+                        std::cout << YELLOW << " clock rate 64000" << RESET << "\n";
+                }
+                
                 std::cout << GREEN << " no shutdown" << RESET << "\n exit\n";
             }
         }

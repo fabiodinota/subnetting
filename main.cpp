@@ -359,6 +359,50 @@ void print_subnet_recursive(const std::vector<Network*>& subnets, Network* curre
     }
 }
 
+void menu_configure_subnets(); 
+
+std::string find_server_ip_for_relay(int server_router_id) {
+    if (server_router_id < 0 || server_router_id >= (int)devices.size()) return "";
+    Device* server_dev = devices[server_router_id];
+    if (server_dev->get_type() != DeviceType::ROUTER) return "";
+
+    // Priority 1: Check if server is reachable via WAN (/30)
+    for (auto n : subnets) {
+        if (n->is_split) continue;
+        if (n->get_slash() == 30) {
+            std::string assign = n->get_assignment();
+            // A. Server is the owner of this /30
+            if (assign.find(server_dev->get_hostname()) != std::string::npos) {
+                return address_to_str(n->get_address() + 1);
+            }
+            // B. Server is the peer (connected to owner)
+            for(auto dev : devices) {
+                if(dev->get_type() == DeviceType::ROUTER && dev != server_dev) {
+                    if(assign.find(dev->get_hostname()) != std::string::npos) {
+                        // This dev owns the subnet. Is it connected to server?
+                        for(auto l : links) {
+                            if((l->device1 == server_dev && l->device2 == dev) || 
+                               (l->device1 == dev && l->device2 == server_dev)) {
+                                return address_to_str(n->get_address() + 2);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Priority 2: Return any valid interface IP on the server
+    for (auto n : subnets) {
+        if (n->is_split) continue;
+        if (n->get_assignment().find(server_dev->get_hostname()) != std::string::npos) {
+            return address_to_str(n->get_address() + 1);
+        }
+    }
+
+    return "";
+}
+
 void menu_configure_subnets() {
     std::cout << "\n--- Configure Subnets ---\n";
     
@@ -634,64 +678,41 @@ void menu_configure_subnets() {
                                     if (dev->get_type() == DeviceType::ROUTER) router_idx++;
                                 }
                                 
-                                std::cout << "Enter Remote DHCP Server Device ID: ";
+                                std::cout << "Enter DHCP Server Router ID (or -1 for manual IP): ";
                                 int remote_id = -1;
                                 if (!(std::cin >> remote_id)) { clear_input(); remote_id = -1; }
                                 clear_input();
                                 
-                                if (remote_id >= 0) {
-                                    selected_net->dhcp_server_id = remote_id;
-                                    
-                                    // AUTO-DETECT: Find WAN link to remote router
-                                    std::string auto_helper_ip = "";
-                                    
-                                    // Get the remote router's name
-                                    std::string remote_router_name = "";
-                                    {
-                                        int idx = 0;
-                                        for (auto dev : devices) {
-                                            if (dev->get_type() == DeviceType::ROUTER) {
-                                                if (idx == remote_id) {
-                                                    remote_router_name = dev->get_hostname();
-                                                    break;
-                                                }
-                                                idx++;
-                                            }
-                                        }
-                                    }
-                                    
-                                    // Search for /30 WAN subnet assigned to remote router
-                                    for (auto n : subnets) {
-                                        if (n->is_split) continue;
-                                        if (n->get_slash() == 30) {
-                                            std::string assignment = n->get_assignment();
-                                            if (assignment.find(remote_router_name) != std::string::npos) {
-                                                // Found! Use gateway IP (first usable)
-                                                auto_helper_ip = address_to_str(n->get_address() + 1);
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    
-                                    if (!auto_helper_ip.empty()) {
-                                        selected_net->dhcp_helper_ip = auto_helper_ip;
-                                        std::cout << Color::GREEN << Icon::CHECK << " Auto-detected Server IP: " 
-                                                  << auto_helper_ip << Color::RESET << "\n";
-                                    } else {
-                                        // Fallback: Manual entry
-                                        std::cout << "Enter IP of Remote DHCP Server (for ip helper-address): ";
-                                        std::string helper_ip;
-                                        std::cin >> helper_ip; clear_input();
-                                        selected_net->dhcp_helper_ip = helper_ip;
-                                    }
-                                    
-                                    std::cout << Color::YELLOW << Icon::WARN << " Centralized DHCP configured. " 
-                                              << "Helper-address: " << selected_net->dhcp_helper_ip << Color::RESET << "\n";
+                                if (remote_id == -1) {
+                                    std::cout << "Enter IP of Remote DHCP Server (for ip helper-address): ";
+                                    std::string helper_ip;
+                                    std::cin >> helper_ip; clear_input();
+                                    selected_net->dhcp_server_id = -1; 
+                                    selected_net->dhcp_helper_ip = helper_ip;
                                 } else {
-                                    // Invalid, fall back to local
-                                    selected_net->dhcp_server_id = current_router_idx;
-                                    selected_net->dhcp_helper_ip = "";
-                                    std::cout << "Invalid ID. Using local DHCP.\n";
+                                     if(remote_id >= 0 && remote_id < (int)devices.size() && devices[remote_id]->get_type() == DeviceType::ROUTER) {
+                                         selected_net->dhcp_server_id = remote_id;
+                                         std::string auto_ip = find_server_ip_for_relay(remote_id);
+                                         
+                                         if(!auto_ip.empty()) {
+                                             selected_net->dhcp_helper_ip = auto_ip;
+                                             std::cout << Color::GREEN << "✅ Auto-Resolved Server IP: " << auto_ip << Color::RESET << "\n";
+                                         } else {
+                                             std::cout << Color::RED << "❌ Could not find an IP for Router " << remote_id << ". Please enter manually." << Color::RESET << "\n";
+                                             std::cout << "Enter IP: ";
+                                             std::string helper_ip;
+                                             std::cin >> helper_ip; clear_input();
+                                             selected_net->dhcp_helper_ip = helper_ip;
+                                         }
+                                         
+                                          std::cout << Color::YELLOW << Icon::WARN << " Centralized DHCP configured. " 
+                                              << "Helper-address: " << selected_net->dhcp_helper_ip << Color::RESET << "\n";
+                                     } else {
+                                         std::cout << "Invalid Router ID. Using local config logic or disabling.\n";
+                                         // Fallback if invalid
+                                         selected_net->dhcp_server_id = current_router_idx;
+                                         selected_net->dhcp_helper_ip = "";
+                                     }
                                 }
                             } else {
                                 // LOCAL DHCP Server
