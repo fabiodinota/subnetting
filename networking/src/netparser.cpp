@@ -29,11 +29,12 @@ Network* NetParser::get_network()
 void NetParser::assert_network(std::string str_net)
 {
     logger->trace("Validating the [{}] string network...", str_net);
+    // Modified regex to strictly enforce CIDR suffix e.g. /24
     std::regex pattern(IPV4_NET_PATTERN);
     if (!std::regex_match(str_net, pattern))
     {
         logger->error("Error parsing network [{}]", str_net);
-        exit(1);
+        throw std::invalid_argument("Invalid Network Format (expected x.x.x.x/yy)");
     }
     logger->trace("Network string [{}] OK", str_net);
 }
@@ -43,15 +44,30 @@ int NetParser::parse_address(std::string str_net)
     logger->trace("Parsing address to integer...");
     int from_index = 0, point_index = 0;
     int address = 0, segment = 24, value;
-    while (point_index >= 0)
-    {
-        point_index = str_net.find(".", from_index);
-        value = atoi(str_net.substr(from_index, point_index).c_str());
-        logger->debug("value={}, from_index={}, point_pos={}", value, from_index, point_index);
-
-        address |= value << segment;
+    
+    // We expect exactly 3 dots for 4 octets.
+    // The previous loop condition 'point_index >= 0' combined with find logic was risky.
+    // Let's use a simpler tokenization loop.
+    
+    for(int i=0; i<4; ++i) {
+        if(i < 3) {
+            point_index = str_net.find(".", from_index);
+            if(point_index == std::string::npos) {
+                // Should be caught by regex, but safety first
+                throw std::invalid_argument("Invalid IP format: missing dots");
+            }
+            std::string part = str_net.substr(from_index, point_index - from_index);
+            value = atoi(part.c_str());
+            from_index = point_index + 1;
+        } else {
+            // Last octet is until the slash
+            point_index = str_net.find("/", from_index);
+            std::string part = str_net.substr(from_index, point_index - from_index);
+            value = atoi(part.c_str());
+        }
+        
+        address |= (value << segment);
         segment -= 8;
-        from_index = point_index + 1;
     }
     return address;
 }

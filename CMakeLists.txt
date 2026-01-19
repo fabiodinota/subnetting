@@ -21,4 +21,4 @@ add_subdirectory(utilities)
 add_subdirectory(workflow)
 
 add_executable(subnet main.cpp)
-target_link_libraries(subnet wflow)
+target_link_libraries(subnet wflow utils)
